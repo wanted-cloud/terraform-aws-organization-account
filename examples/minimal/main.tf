@@ -8,3 +8,10 @@ terraform {
     }
   }
 }
+
+module "account" {
+  source = "../.."
+
+  email = "aws-root+shared@example.com"
+  name  = "Shared Services"
+}

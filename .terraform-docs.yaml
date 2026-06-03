@@ -13,6 +13,8 @@ content: |-
   - [Outputs](#outputs)
   - [Resources](#resources)
   - [Usage](#usage)
+  - [Importing existing resources](#importing-existing-resources)
+  - [Gotchas](#gotchas)
   - [Contributing](#contributing)
 
   {{ .Requirements }}
@@ -26,25 +28,60 @@ content: |-
   {{ .Resources }}
 
   ## Usage
-  
+
   > For more detailed examples navigate to `examples` folder of this repository.
 
   Module was also published via Terraform Registry and can be used as a module from the registry.
 
   ```hcl
-  module "example" {
-    source  = "wanted-cloud/..."
-    version = "x.y.z"
+  module "account" {
+    source  = "wanted-cloud/organization-account/aws"
+    version = "~> 0.1"
+
+    email = "aws-root+shared@example.com"
+    name  = "Shared Services"
   }
   ```
 
-  ### Basic usage example
-
-  The minimal usage for the module is as follows:
+  ### Minimal — account at org root
 
   ```hcl
-  {{ include "./examples/base/main.tf" }}
+  {{ include "./examples/minimal/main.tf" }}
   ```
+
+  ### Workload — account inside an OU with tags
+
+  ```hcl
+  {{ include "./examples/workload/main.tf" }}
+  ```
+
+  ## Importing existing resources
+
+  When the account already exists in the Organization (it was invited rather than created, or it predates Terraform management), import it before the first `terraform apply`:
+
+  ```bash
+  terraform import module.account.aws_organizations_account.this 123456789012
+  ```
+
+  The 12-digit account ID is the import key. After import, run `terraform plan` and reconcile any field drift — especially `name` casing and `parent_id`.
+
+  ## Gotchas
+
+  Read these before applying in any account that matters.
+
+  | # | Gotcha | Mitigation |
+  |---|---|---|
+  | 1 | **Email is globally unique forever** — once used, even briefly, it cannot be reused for 90 days after the owning account is closed. | Standardize on plus-addressing (`prefix+role@company.com`) so each account gets a deterministic, recoverable address. |
+  | 2 | **`iam_user_access_to_billing` is immutable post-creation.** | `lifecycle.ignore_changes` on this field surfaces the constraint at plan time; document that changing it requires destroy + recreate (90-day cooldown). |
+  | 3 | **`terraform destroy` does NOT close the account by default** — it just removes the account from the Org, leaving a "standalone" account behind. | Document explicitly; recommend `close_on_deletion = false` for production and only flip to true for ephemeral/sandbox tiers. |
+  | 4 | **Closing an account triggers 90-day suspension** before AWS fully deletes it; the email is locked for that period. | If you set `close_on_deletion = true`, plan for the 90-day blackout window — destroy/recreate of the same account is impossible inside that window. |
+  | 5 | **Account creation is async** and can take 5-15 minutes per account; long parallel applies multiply this. | Set sensible Terraform timeouts (default 30m create is fine); avoid creating >5 accounts per apply if you need fast iteration — split into batches. |
+  | 6 | **`CreateAccount` requires `feature_set = "ALL"` on the Org** — CONSOLIDATED_BILLING orgs return AccessDenied. | Validation is upstream (T1.01 default is "ALL"); if a caller downgraded, the AWS API error will surface at apply time. |
+  | 7 | **Moving an account between OUs** (changing `parent_id`) is a non-destructive update — Terraform updates in place via `MoveAccount`. | Expected behaviour; no warning needed, but be aware that plans showing parent_id changes do not recreate the account. |
+  | 8 | **Account `name` casing changes are detected** — AWS preserves case as supplied; renaming triggers an in-place update. | Pick a casing convention (recommend Title Case for human-readable names) and stick with it. |
+  | 9 | **Root user credentials are unrecoverable without the email** — losing access to the inbox means losing root. | Document that the email mailbox MUST stay deliverable for the account's full lifetime. |
+  | 10 | **`role_name` is created in the new account at creation time only** — changing it later does NOT rename the role; it's a one-shot field. | If you need a different cross-account role name, do it at module-creation time, or create additional roles via T2.02 IAM-role module. |
+
   ## Contributing
 
   _Contributions are welcomed and must follow [Code of Conduct](https://github.com/wanted-cloud/.github?tab=coc-ov-file) and common [Contributions guidelines](https://github.com/wanted-cloud/.github/blob/main/docs/CONTRIBUTING.md)._
@@ -60,4 +97,3 @@ output:
     <!-- BEGIN_TF_DOCS -->
     {{ .Content }}
     <!-- END_TF_DOCS -->
-    
